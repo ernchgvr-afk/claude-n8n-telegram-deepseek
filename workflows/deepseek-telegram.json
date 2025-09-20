@@ -1,0 +1,423 @@
+{
+  "name": "DeepSeek AI Telegram Bot with Memory",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "id": "telegram_trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "telegram-webhook-deepseek",
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "deepseek-chat",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 2000,
+          "topP": 0.95,
+          "frequencyPenalty": 0.3,
+          "presencePenalty": 0.3
+        }
+      },
+      "id": "deepseek_chat",
+      "name": "DeepSeek V3 Chat",
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": {
+        "deepSeekApi": {
+          "id": "2",
+          "name": "DeepSeek API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "deepseek-reasoner",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 4000,
+          "reasoningTokens": 32000
+        }
+      },
+      "id": "deepseek_reasoning",
+      "name": "DeepSeek R1 Reasoning",
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [650, 500],
+      "credentials": {
+        "deepSeekApi": {
+          "id": "2",
+          "name": "DeepSeek API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "telegram_{{ $json.message.from.id }}",
+        "contextWindowLength": 10
+      },
+      "id": "memory_buffer",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1,
+      "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "resource": "postgres",
+        "operation": "executeQuery",
+        "query": "INSERT INTO chat_history (user_id, user_name, message, response, timestamp) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id) DO UPDATE SET message = $3, response = $4, timestamp = $5",
+        "additionalFields": {
+          "queryParams": "={{ [$json.message.from.id, $json.message.from.first_name, $json.message.text, $json.response, new Date().toISOString()] }}"
+        }
+      },
+      "id": "save_to_db",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [850, 400],
+      "credentials": {
+        "postgres": {
+          "id": "3",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.text }}",
+              "operation": "startsWith",
+              "value2": "/reason"
+            }
+          ]
+        }
+      },
+      "id": "route_by_command",
+      "name": "Route by Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.message.text }}",
+        "systemMessage": "You are a helpful AI assistant powered by DeepSeek. You provide accurate, detailed, and thoughtful responses. You remember previous conversations and maintain context.",
+        "chatId": "={{ $json.message.from.id }}"
+      },
+      "id": "ai_agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "/webhook/deepseek-commands",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook_commands",
+      "name": "Webhook for Commands",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "webhookId": "deepseek-commands"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "append",
+        "sheetId": "your-google-sheet-id",
+        "range": "A:E",
+        "options": {
+          "valueInputOption": "USER_ENTERED"
+        },
+        "values": "={{ [[new Date().toISOString(), $json.message.from.id, $json.message.from.first_name, $json.message.text, $json.response]] }}"
+      },
+      "id": "log_to_sheets",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [850, 500],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "4",
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "={{ $json.response }}",
+        "additionalFields": {
+          "parse_mode": "Markdown",
+          "disable_web_page_preview": true
+        }
+      },
+      "id": "telegram_send",
+      "name": "Send Telegram Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process and format the response\nconst input = items[0].json;\nconst response = input.output || input.response || 'No response generated';\nconst userId = input.message?.from?.id || 'unknown';\nconst userName = input.message?.from?.first_name || 'User';\n\n// Add formatting\nlet formattedResponse = response;\n\n// Add typing indicator for long responses\nif (response.length > 500) {\n  // Send typing action (handled separately)\n  formattedResponse = `${response}`;\n}\n\n// Add context about the model used\nconst modelUsed = input.modelType === 'reasoning' ? '🧠 DeepSeek-R1' : '💬 DeepSeek-V3';\nformattedResponse = `${modelUsed}\\n\\n${formattedResponse}`;\n\n// Add token usage if available\nif (input.usage) {\n  const cost = calculateCost(input.usage);\n  formattedResponse += `\\n\\n📊 Tokens: ${input.usage.total_tokens} | 💰 Cost: $${cost.toFixed(4)}`;\n}\n\nreturn [{\n  json: {\n    ...input,\n    response: formattedResponse,\n    userId,\n    userName,\n    timestamp: new Date().toISOString()\n  }\n}];\n\nfunction calculateCost(usage) {\n  // DeepSeek pricing per 1M tokens\n  const inputCost = (usage.prompt_tokens / 1000000) * 0.14; // Cache hit price\n  const outputCost = (usage.completion_tokens / 1000000) * 2.19;\n  return inputCost + outputCost;\n}"
+      },
+      "id": "format_response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [950, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.message.text }}",
+              "operation": "contains",
+              "value2": "error"
+            }
+          ]
+        }
+      },
+      "id": "error_handler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 600]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "❌ An error occurred while processing your request. Please try again later.\n\nError: {{ $json.error.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send_error_message",
+      "name": "Send Error Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot Credentials"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": [
+          {
+            "field": "message.text",
+            "operation": "notEmpty"
+          },
+          {
+            "field": "message.from.id",
+            "operation": "isNumber"
+          }
+        ]
+      },
+      "id": "validate_input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [350, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Rate limiting implementation\nconst userId = $input.item.json.message.from.id;\nconst rateLimit = {\n  maxRequests: 30,\n  windowMs: 60000 // 1 minute\n};\n\n// Simple in-memory rate limiting (for production use Redis)\nif (!$env.rateLimitStore) {\n  $env.rateLimitStore = {};\n}\n\nconst now = Date.now();\nconst userLimit = $env.rateLimitStore[userId] || { count: 0, resetTime: now + rateLimit.windowMs };\n\nif (now > userLimit.resetTime) {\n  userLimit.count = 1;\n  userLimit.resetTime = now + rateLimit.windowMs;\n} else {\n  userLimit.count++;\n}\n\n$env.rateLimitStore[userId] = userLimit;\n\nif (userLimit.count > rateLimit.maxRequests) {\n  throw new Error(`Rate limit exceeded. Please wait ${Math.ceil((userLimit.resetTime - now) / 1000)} seconds.`);\n}\n\nreturn $input.item;"
+      },
+      "id": "rate_limiter",
+      "name": "Rate Limiter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 200]
+    }
+  ],
+  "connections": {
+    "telegram_trigger": {
+      "main": [
+        [
+          {
+            "node": "validate_input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "validate_input": {
+      "main": [
+        [
+          {
+            "node": "rate_limiter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "rate_limiter": {
+      "main": [
+        [
+          {
+            "node": "route_by_command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "route_by_command": {
+      "main": [
+        [
+          {
+            "node": "deepseek_chat",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "deepseek_reasoning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deepseek_chat": {
+      "main": [
+        [
+          {
+            "node": "ai_agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deepseek_reasoning": {
+      "main": [
+        [
+          {
+            "node": "ai_agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ai_agent": {
+      "main": [
+        [
+          {
+            "node": "format_response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "format_response": {
+      "main": [
+        [
+          {
+            "node": "save_to_db",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "log_to_sheets",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "telegram_send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "error_handler": {
+      "main": [
+        [
+          {
+            "node": "send_error_message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "memory_buffer": {
+      "ai_memory": [
+        [
+          {
+            "node": "ai_agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-notification-workflow"
+  },
+  "versionId": "1.0.0",
+  "id": "deepseek-telegram-bot",
+  "meta": {
+    "templateId": "deepseek-telegram-integration",
+    "description": "Complete DeepSeek AI integration with Telegram bot, featuring both V3 chat and R1 reasoning models, conversation memory, rate limiting, and comprehensive logging.",
+    "author": "n8n Community",
+    "category": "AI",
+    "subcategory": "Chatbots"
+  },
+  "tags": [
+    "AI",
+    "DeepSeek",
+    "Telegram",
+    "Chatbot",
+    "Memory",
+    "PostgreSQL",
+    "Google Sheets"
+  ]
+}
