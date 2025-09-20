@@ -1,0 +1,15 @@
+{
+  "name": "deepseek-telegram-bot",
+  "version": "1.0.0",
+  "description": "Мой умный Telegram бот с DeepSeek AI",
+  "scripts": {
+    "start": "n8n start"
+  },
+  "dependencies": {
+    "n8n": "latest",
+    "@n8n/n8n-nodes-langchain": "latest"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
